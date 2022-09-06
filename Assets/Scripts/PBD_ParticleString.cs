@@ -1,5 +1,4 @@
-﻿
-using UdonSharp;
+﻿using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
 using VRC.Udon;
@@ -96,6 +95,8 @@ public class PBD_ParticleString : UdonSharpBehaviour {
             if(isFixed[k]) v[k] = Vector3.zero;
         }
 
+        VelocityDamping(n, x, v, m, kDamping);
+
         //位置の更新
         for(int k = 0; k < n; k++) {
             p[k] = x[k] + v[k] * dt;
@@ -123,37 +124,107 @@ public class PBD_ParticleString : UdonSharpBehaviour {
         }
 
         SetParticle();
-
     }
 
-    // //速度のDamping
-    // void VelocityDamping(int n, Vector3[] x, Vector3[] v, float[] m, float k) {
+    //速度のDamping
+    void VelocityDamping(int n, Vector3[] x, Vector3[] v, float[] m, float k) {
 
-    //     var xcm = Vector3.zero;
-    //     var vcm = Vector3.zero;
-    //     var totalMass = 0f;
-    //     for(int i = 0; i < n; i++) {
-    //         xcm += x[i];
-    //         vcm += v[i];
-    //         totalMass += m[i];
-    //     }
+        var xcm = Vector3.zero;
+        var vcm = Vector3.zero;
+        var totalMass = 0f;
+        for(int i = 0; i < n; i++) {
+            xcm += x[i];
+            vcm += v[i];
+            totalMass += m[i];
+        }
 
-    //     xcm /= totalMass;
-    //     vcm /= totalMass;
+        xcm /= totalMass;
+        vcm /= totalMass;
 
-    //     var L = Vector3.zero;
-    //     var I = new SquareMatrix(3);
-    //     var rs = new Vector3[n];
+        var L = Vector3.zero;
+        var I = new double[9];
+        var rs = new Vector3[n];
         
-    //     for(int i = 0; i < n; i++) {
-    //         Vector3 r = x[i] - xcm;
-    //         rs[i] = r;
+        for(int i = 0; i < n; i++) {
+            Vector3 r = x[i] - xcm;
+            rs[i] = r;
 
-    //         var R = new SquareMatrix(3);
-    //         R
-    //     }
+            double[] R = new double[9];
+            R[0] = 0;
+            R[1] = r[2];
+            R[2] = -r[1];
+            R[3] = r[2];
+            R[4] = 0;
+            R[5] = -r[0];
+            R[6] = -r[1];
+            R[7] = r[0];
+            R[8] = 0;
 
-    // } 
+            Debug.Log(R[1]);
+
+            //Rの転置行列
+            double[] RT = new double[9];
+            RT[0] = R[0];
+            RT[1] = R[3];
+            RT[2] = R[6];
+            RT[3] = R[1];
+            RT[4] = R[4];
+            RT[5] = R[7];
+            RT[6] = R[2];
+            RT[7] = R[5];
+            RT[8] = R[8];
+
+            //R*RT*m[i]
+            I[0] += (R[0]*RT[0] + R[1]*RT[3] + R[2]*RT[6]) * m[i];
+            I[1] += (R[0]*RT[1] + R[1]*RT[4] + R[2]*RT[7]) * m[i];
+            I[2] += (R[0]*RT[2] + R[1]*RT[5] + R[2]*RT[8]) * m[i];
+
+            I[3] += (R[3]*RT[0] + R[4]*RT[3] + R[5]*RT[6]) * m[i];
+            I[4] += (R[3]*RT[1] + R[4]*RT[4] + R[5]*RT[7]) * m[i];
+            I[5] += (R[3]*RT[2] + R[4]*RT[5] + R[5]*RT[8]) * m[i];
+
+            I[6] += (R[6]*RT[0] + R[7]*RT[3] + R[8]*RT[6]) * m[i];
+            I[7] += (R[6]*RT[1] + R[7]*RT[4] + R[8]*RT[7]) * m[i];
+            I[8] += (R[6]*RT[2] + R[7]*RT[5] + R[8]*RT[8]) * m[i];
+
+            L += Vector3.Cross(r, m[i] * v[i]);
+
+        }
+
+        //Iの余因子行列
+        double[] O = new double[9];
+        O[0] = I[4]*I[8] - I[5]*I[7] * Mathf.Pow(-1, 1+1);
+        O[1] = I[3]*I[8] - I[5]*I[6] * Mathf.Pow(-1, 1+2);
+        O[2] = I[3]*I[7] - I[4]*I[6] * Mathf.Pow(-1, 1+3);
+
+        O[3] = I[1]*I[8] - I[2]*I[7] * Mathf.Pow(-1, 2+1);
+        O[4] = I[0]*I[8] - I[2]*I[6] * Mathf.Pow(-1, 2+2);
+        O[5] = I[0]*I[7] - I[1]*I[6] * Mathf.Pow(-1, 2+3);
+        
+        O[6] = I[1]*I[5] - I[2]*I[4] * Mathf.Pow(-1, 3+1);
+        O[7] = I[0]*I[5] - I[2]*I[3] * Mathf.Pow(-1, 3+2);
+        O[8] = I[0]*I[4] - I[1]*I[3] * Mathf.Pow(-1, 3+3);
+
+        //Iの行列式
+        double detI = I[0]*I[4]*I[8] + I[1]*I[5]*I[6] + I[2]*I[7]*I[3] - I[2]*I[4]*I[6] - I[1]*I[3]*I[8] - I[0]*I[7]*I[5];
+
+        //OをIの逆行列にする
+        for(int i = 0; i < O.Length; i++) {
+            O[i] *= 1/detI;
+        }
+
+        Vector3 omega = new Vector3((float)O[0]*L[0] + (float)O[1]*L[1] + (float)O[2]*L[2],
+                                    (float)O[3]*L[0] + (float)O[4]*L[1] + (float)O[5]*L[2],
+                                    (float)O[6]*L[0] + (float)O[7]*L[1] + (float)O[8]*L[2]);
+        
+        if(!(float.IsInfinity(omega.x) || float.IsNaN(omega.x))) {
+            for(int i = 0; i < n; i++) {
+                Vector3 deltaV = vcm + Vector3.Cross(omega, rs[i]) - v[i];
+                v[i] += k * deltaV;
+            }
+        }
+
+    } 
 
     void SetParticle() {
 
